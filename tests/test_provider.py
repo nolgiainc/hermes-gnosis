@@ -29,8 +29,6 @@ def test_scope_construction(app):
         "session_id": "sess-42",
         "user_id": "lesse",
         "visibility": "private_user",
-        "guild_id": "",
-        "channel_id": "",
     }
 
 

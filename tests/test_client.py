@@ -15,8 +15,6 @@ SCOPE = {
     "session_id": "sess-1",
     "user_id": "hermes-user",
     "visibility": "private_user",
-    "guild_id": "",
-    "channel_id": "",
 }
 
 

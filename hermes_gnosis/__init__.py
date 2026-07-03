@@ -283,7 +283,11 @@ class GnosisMemoryProvider(MemoryProvider):
     # -- Scope / metadata -------------------------------------------------------
 
     def _scope(self) -> Dict[str, Any]:
-        """Build the gnosis scope object for the current session."""
+        """Build the gnosis scope object for the current session.
+
+        guild_id/channel_id are omitted entirely: gnosis's scope model
+        rejects empty strings (min_length=1) for optional fields.
+        """
         return {
             "tenant_id": self._tenant_id,
             "space_id": DEFAULT_SPACE_ID,
@@ -291,8 +295,6 @@ class GnosisMemoryProvider(MemoryProvider):
             "session_id": self._session_id or _FALLBACK_SESSION_ID,
             "user_id": self._user_id,
             "visibility": "private_user",
-            "guild_id": "",
-            "channel_id": "",
         }
 
     def _write_metadata(self) -> Dict[str, Any]:
