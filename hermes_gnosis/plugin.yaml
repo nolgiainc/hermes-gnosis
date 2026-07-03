@@ -1,0 +1,15 @@
+name: gnosis
+version: 0.1.0
+kind: exclusive
+description: "Gnosis — self-hosted memory service with server-side fact extraction, semantic search, and tenant/agent/user scoping."
+author: bromigos-org
+requires_env:
+  - GNOSIS_SERVICE_TOKEN
+provides_tools:
+  - gnosis_list
+  - gnosis_search
+  - gnosis_add
+  - gnosis_update
+  - gnosis_delete
+pip_dependencies:
+  - httpx>=0.27,<1
