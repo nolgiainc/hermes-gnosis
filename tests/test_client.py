@@ -83,6 +83,41 @@ def test_search():
     assert results[0]["score"] == 0.92
 
 
+def test_get_memory_context():
+    app = RecordingApp(responses={
+        ("POST", "/v1/memory/context"): (200, {
+            "sections": [
+                {"source": "long_term_facts", "content": "likes tea", "facts": []},
+                {"source": "graph", "content": "works with Bob", "facts": []},
+            ],
+            "sufficiency": "high",
+        }),
+    })
+    client = make_client(app)
+    sections = client.get_memory_context(SCOPE, "beverages", max_items=5)
+    request = app.requests[0]
+    assert request.method == "POST"
+    assert request.url.path == "/v1/memory/context"
+    body = app.body()
+    assert body["scope"] == SCOPE
+    assert body["query"] == "beverages"
+    assert body["max_items"] == 5
+    # Defaults: long-term + graph on, short-term + reasoning off.
+    assert body["include_long_term"] is True
+    assert body["include_graph"] is True
+    assert body["include_short_term"] is False
+    assert body["include_reasoning"] is False
+    assert [s["content"] for s in sections] == ["likes tea", "works with Bob"]
+
+
+def test_get_memory_context_non_list_sections_degrades_to_empty():
+    app = RecordingApp(responses={
+        ("POST", "/v1/memory/context"): (200, {"sections": None}),
+    })
+    client = make_client(app)
+    assert client.get_memory_context(SCOPE, "q") == []
+
+
 def test_list():
     app = RecordingApp(responses={
         ("POST", "/v1/memories/list"): (200, {

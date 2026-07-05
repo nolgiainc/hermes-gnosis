@@ -220,12 +220,102 @@ def test_prefetch_returns_formatted_memories():
         ]}),
     })
     provider = make_provider(app)
+    # Pin to the raw-search recall path (the default is now "context").
+    provider._recall_mode = "search"
     provider.queue_prefetch("what do I drink?")
     _join_background(provider)
     result = provider.prefetch("what do I drink?")
     assert "## Gnosis Memory" in result
     assert "- likes tea" in result
     assert "- works at bromigos" in result
+
+
+def test_prefetch_context_mode_renders_sections():
+    # Default recall_mode is "context": the read pipeline's sections are
+    # concatenated verbatim (they're already prompt-shaped server-side).
+    app = RecordingApp(responses={
+        ("POST", "/v1/memory/context"): (200, {"sections": [
+            {"source": "long_term_facts",
+             "content": "- likes tea\n- works at bromigos", "facts": []},
+            {"source": "graph", "content": "Collaborates with Bob.", "facts": []},
+        ]}),
+    })
+    provider = make_provider(app)
+    assert provider._recall_mode == "context"
+    provider.queue_prefetch("what do I drink?")
+    _join_background(provider)
+    result = provider.prefetch("what do I drink?")
+    assert result.startswith("## Gnosis Memory")
+    assert "likes tea" in result
+    assert "Collaborates with Bob." in result
+    # Context mode hits the read pipeline, not raw vector search.
+    assert app.requests[0].url.path == "/v1/memory/context"
+
+
+def test_prefetch_context_mode_drops_short_term_sections():
+    # short_term is dropped defensively — recall injection is for durable
+    # cross-session memory, not the live conversation window.
+    app = RecordingApp(responses={
+        ("POST", "/v1/memory/context"): (200, {"sections": [
+            {"source": "short_term", "content": "we're mid-conversation", "facts": []},
+            {"source": "long_term_facts", "content": "likes tea", "facts": []},
+        ]}),
+    })
+    provider = make_provider(app)
+    provider.queue_prefetch("q")
+    _join_background(provider)
+    result = provider.prefetch("q")
+    assert "likes tea" in result
+    assert "mid-conversation" not in result
+
+
+def test_prefetch_search_mode_uses_search_path():
+    app = RecordingApp(responses={
+        ("POST", "/v1/memories/search"): (200, {"results": [
+            {"memory_id": "m-1", "content": "likes tea", "score": 0.9},
+        ]}),
+    })
+    provider = make_provider(app)
+    provider._recall_mode = "search"
+    provider.queue_prefetch("what do I drink?")
+    _join_background(provider)
+    result = provider.prefetch("what do I drink?")
+    assert "## Gnosis Memory" in result
+    assert "- likes tea" in result
+    # search mode never touches the context endpoint.
+    assert app.requests[0].url.path == "/v1/memories/search"
+
+
+def test_prefetch_context_failure_falls_back_to_search():
+    # /v1/memory/context errors → degrade to raw search, still return a block.
+    app = RecordingApp(responses={
+        ("POST", "/v1/memory/context"): (500, {"error": "pipeline down"}),
+        ("POST", "/v1/memories/search"): (200, {"results": [
+            {"memory_id": "m-1", "content": "likes tea", "score": 0.9},
+        ]}),
+    })
+    provider = make_provider(app)
+    provider.queue_prefetch("what do I drink?")
+    _join_background(provider)
+    result = provider.prefetch("what do I drink?")
+    assert "## Gnosis Memory" in result
+    assert "- likes tea" in result
+    paths = [r.url.path for r in app.requests]
+    assert "/v1/memory/context" in paths
+    assert "/v1/memories/search" in paths
+    # A successful fallback is a success — the breaker stays closed.
+    assert provider._consecutive_failures == 0
+
+
+def test_prefetch_context_and_search_both_fail_returns_empty_once():
+    # Both endpoints down → empty recall, no crash, and the breaker counts the
+    # cycle exactly ONCE (context miss + search miss must not double-count).
+    app = RecordingApp(default_status=500, default_body={"error": "down"})
+    provider = make_provider(app)
+    provider.queue_prefetch("anything")
+    _join_background(provider)
+    assert provider.prefetch("anything") == ""
+    assert provider._consecutive_failures == 1
 
 
 def test_prefetch_non_raising_on_server_error():

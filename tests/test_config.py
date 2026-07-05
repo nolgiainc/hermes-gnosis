@@ -27,6 +27,18 @@ def test_defaults(monkeypatch, tmp_path):
     assert "user_id" not in cfg  # unset → gateway-native id may flow through
 
 
+def test_recall_mode_default_and_overrides(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    # Default is the full read-pipeline recall.
+    assert load_config()["recall_mode"] == "context"
+    # Env var provides the default...
+    monkeypatch.setenv("GNOSIS_RECALL_MODE", "search")
+    assert load_config()["recall_mode"] == "search"
+    # ...and gnosis.json overrides it.
+    (tmp_path / "gnosis.json").write_text(json.dumps({"recall_mode": "context"}))
+    assert load_config()["recall_mode"] == "context"
+
+
 def test_json_overrides_env(monkeypatch, tmp_path):
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setenv("GNOSIS_URL", "https://env.example")
