@@ -20,8 +20,9 @@ Behavioral settings (live in $HERMES_HOME/gnosis.json, set via
   timeout     — read/search request timeout in seconds (default: 10)
   add_timeout — extraction-mode add timeout in seconds (default: 30)
 
-Matching GNOSIS_URL / GNOSIS_USER_ID / GNOSIS_AGENT_ID / GNOSIS_TENANT_ID
-env vars are read as fallback defaults; gnosis.json overrides them.
+Matching GNOSIS_URL / GNOSIS_USER_ID / GNOSIS_AGENT_ID / GNOSIS_TENANT_ID /
+GNOSIS_TIMEOUT / GNOSIS_ADD_TIMEOUT env vars are read as fallback defaults;
+gnosis.json overrides them (except the token, where the env var wins).
 """
 
 from __future__ import annotations
