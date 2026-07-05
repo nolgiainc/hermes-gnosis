@@ -19,12 +19,19 @@ The plugin drives gnosis's `/v1/memories` surface across a turn:
    stored memories. Those are fetched in a background thread on `initialize()`,
    so the prompt waits at most ~1 s for them and never blocks on a cold service.
 
-2. **Before each turn** — `on_turn_start` kicks off a background semantic
-   **prefetch** of the user's question. When hermes calls `prefetch()` the
-   result is usually already warm; otherwise it waits at most **1.5 s**, then
-   injects the hits as a `## Gnosis Memory` block (or nothing, if the service is
-   slow — `gnosis_search` is still the model's backstop). `queue_prefetch()`
-   warms recall for the *next* turn.
+2. **Before each turn** — `on_turn_start` kicks off a background **prefetch** of
+   the user's question. By default this calls `POST /v1/memory/context`, gnosis's
+   full **read pipeline** (adaptive routing, read-time supersession, graph-QA
+   fusion/traversal, hybrid BM25, Chain-of-Note, facts→verbatim expansion,
+   abstention/sufficiency), and injects its already-prompt-shaped `sections` as a
+   `## Gnosis Memory` block. Set `recall_mode` to `search` to fall back to raw
+   vector search instead; if the context endpoint errors, the plugin degrades to
+   raw search automatically so recall never hard-fails. When hermes calls
+   `prefetch()` the result is usually already warm; otherwise it waits at most
+   **1.5 s**, then injects the block (or nothing, if the service is slow —
+   `gnosis_search` is still the model's backstop). `queue_prefetch()` warms
+   recall for the *next* turn. (The `gnosis_search` tool always uses raw search —
+   it needs per-memory ids for `update`/`delete`.)
 
 3. **During the turn** — the model can call five tools (below) to search, list,
    store, correct, or forget memories itself.
@@ -99,10 +106,12 @@ service.
 | `tenant_id` | `bromigos` | Gnosis tenant — **must match** the server's `GNOSIS_TENANT_ID` |
 | `timeout` | `10` | Read/search request timeout (seconds) |
 | `add_timeout` | `30` | Extraction-mode add timeout (seconds) |
+| `recall_mode` | `context` | Source for per-turn injected recall: `context` (full gnosis read pipeline via `POST /v1/memory/context`) or `search` (raw vector search). The `gnosis_search` tool always uses raw search regardless. |
 
 Matching `GNOSIS_URL` / `GNOSIS_USER_ID` / `GNOSIS_AGENT_ID` / `GNOSIS_TENANT_ID`
-/ `GNOSIS_TIMEOUT` / `GNOSIS_ADD_TIMEOUT` env vars are read as fallback defaults;
-`gnosis.json` overrides them (except the token, where the env var always wins).
+/ `GNOSIS_TIMEOUT` / `GNOSIS_ADD_TIMEOUT` / `GNOSIS_RECALL_MODE` env vars are read
+as fallback defaults; `gnosis.json` overrides them (except the token, where the
+env var always wins).
 
 ## Tools
 
@@ -174,9 +183,11 @@ leftover setup-wizard default never silently buckets every gateway user together
 ## Gnosis-side requirements
 
 - A gnosis service reachable at `gnosis_url`, exposing the v1 API — `POST
-  /v1/memories`, `POST /v1/memories/search`, `POST /v1/memories/list`, `PATCH
-  /v1/memories/{id}`, `DELETE /v1/memories/{id}` — authenticated with
-  `Authorization: Bearer <token>`.
+  /v1/memories`, `POST /v1/memories/search`, `POST /v1/memory/context`, `POST
+  /v1/memories/list`, `PATCH /v1/memories/{id}`, `DELETE /v1/memories/{id}` —
+  authenticated with `Authorization: Bearer <token>`. (`/v1/memory/context`
+  powers the default `recall_mode`; with `recall_mode=search` only the plain
+  endpoints are needed.)
 - A service token valid for the configured `tenant_id`.
 - **`GNOSIS_MEMORY_EDIT_ENABLED=true` on the server** for `gnosis_update` /
   `gnosis_delete`. With it off the server returns `403` and the tools report

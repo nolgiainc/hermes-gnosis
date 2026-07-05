@@ -9,6 +9,12 @@ Endpoint contract:
   POST   {base}/v1/memories/search   — {scope, query, limit}
          → {results: [{memory_id, content, score, metadata,
                        created_at, updated_at}]}
+  POST   {base}/v1/memory/context    — full read pipeline (adaptive routing,
+         supersession, graph-QA fusion, hybrid BM25, Chain-of-Note, …)
+         body {scope, query, include_short_term, include_long_term,
+               include_reasoning, include_graph, max_items, graph_limit}
+         → {sections: [{source, memory_type?, content, facts: []}],
+            sufficiency?}
   POST   {base}/v1/memories/list     — {scope, page, page_size}
          → {results, total, page, page_size}
   PATCH  {base}/v1/memories/{id}     — {scope, content}
@@ -125,6 +131,42 @@ class GnosisClient:
         response = self._request("POST", "/v1/memories/search", json_body=body)
         results = response.get("results", [])
         return results if isinstance(results, list) else []
+
+    def get_memory_context(
+        self,
+        scope: Dict[str, Any],
+        query: str,
+        *,
+        include_short_term: bool = False,
+        include_long_term: bool = True,
+        include_reasoning: bool = False,
+        include_graph: bool = True,
+        max_items: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Run gnosis's full read pipeline and return prompt-ready sections.
+
+        Unlike :meth:`search` (plain vector top-k), this hits the richer
+        ``/v1/memory/context`` endpoint, which performs adaptive routing,
+        read-time supersession, graph-QA fusion/traversal, hybrid BM25,
+        Chain-of-Note synthesis, and facts→verbatim expansion, returning
+        ``sections`` already shaped for injection into a prompt. ``query``
+        must be non-empty. Uses the default read timeout.
+
+        Returns the ``sections`` list (each ``{source, memory_type?, content,
+        facts: []}``); a non-list payload degrades to ``[]``.
+        """
+        body = {
+            "scope": scope,
+            "query": query,
+            "include_short_term": include_short_term,
+            "include_long_term": include_long_term,
+            "include_reasoning": include_reasoning,
+            "include_graph": include_graph,
+            "max_items": max_items,
+        }
+        response = self._request("POST", "/v1/memory/context", json_body=body)
+        sections = response.get("sections", [])
+        return sections if isinstance(sections, list) else []
 
     def list(
         self, scope: Dict[str, Any], *, page: int = 1, page_size: int = 100,

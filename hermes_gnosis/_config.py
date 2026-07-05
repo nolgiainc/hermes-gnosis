@@ -14,10 +14,13 @@ Mirrors the mem0 plugin's config pattern:
     tenant_id     — gnosis tenant (default: "bromigos")
     timeout       — request timeout in seconds for reads (default: 10)
     add_timeout   — request timeout for extraction-mode adds (default: 30)
+    recall_mode   — source for per-turn injected recall: "context" (full
+                    gnosis read pipeline via /v1/memory/context, default) or
+                    "search" (raw vector search)
 
 Matching GNOSIS_URL / GNOSIS_USER_ID / GNOSIS_AGENT_ID / GNOSIS_TENANT_ID /
-GNOSIS_TIMEOUT / GNOSIS_ADD_TIMEOUT env vars are read as defaults;
-gnosis.json overrides them (except the token, where the env var wins).
+GNOSIS_TIMEOUT / GNOSIS_ADD_TIMEOUT / GNOSIS_RECALL_MODE env vars are read as
+defaults; gnosis.json overrides them (except the token, where the env var wins).
 """
 
 from __future__ import annotations
@@ -35,6 +38,9 @@ DEFAULT_TENANT_ID = "bromigos"
 DEFAULT_SPACE_ID = "hermes"
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_ADD_TIMEOUT = 30.0
+# Per-turn injected recall source: "context" runs gnosis's full read pipeline
+# (/v1/memory/context); "search" is the legacy raw vector top-k.
+DEFAULT_RECALL_MODE = "context"
 
 TOKEN_ENV_VAR = "GNOSIS_SERVICE_TOKEN"
 
@@ -70,6 +76,7 @@ def load_config() -> Dict[str, Any]:
         "tenant_id": os.environ.get("GNOSIS_TENANT_ID", DEFAULT_TENANT_ID),
         "timeout": _as_float(os.environ.get("GNOSIS_TIMEOUT"), DEFAULT_TIMEOUT),
         "add_timeout": _as_float(os.environ.get("GNOSIS_ADD_TIMEOUT"), DEFAULT_ADD_TIMEOUT),
+        "recall_mode": os.environ.get("GNOSIS_RECALL_MODE", DEFAULT_RECALL_MODE),
     }
     # Only carry user_id when the operator explicitly configured one, so
     # initialize() can fall back to the gateway-native id from kwargs

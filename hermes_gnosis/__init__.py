@@ -19,10 +19,14 @@ Behavioral settings (live in $HERMES_HOME/gnosis.json, set via
   tenant_id   — gnosis tenant (default: "bromigos")
   timeout     — read/search request timeout in seconds (default: 10)
   add_timeout — extraction-mode add timeout in seconds (default: 30)
+  recall_mode — source for per-turn injected recall: "context" (full gnosis
+                read pipeline via /v1/memory/context, default) or "search"
+                (raw vector search)
 
 Matching GNOSIS_URL / GNOSIS_USER_ID / GNOSIS_AGENT_ID / GNOSIS_TENANT_ID /
-GNOSIS_TIMEOUT / GNOSIS_ADD_TIMEOUT env vars are read as fallback defaults;
-gnosis.json overrides them (except the token, where the env var wins).
+GNOSIS_TIMEOUT / GNOSIS_ADD_TIMEOUT / GNOSIS_RECALL_MODE env vars are read as
+fallback defaults; gnosis.json overrides them (except the token, where the env
+var wins).
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from typing import Any, Dict, List, Optional
 from ._compat import MemoryProvider, tool_error
 from ._config import (
     DEFAULT_AGENT_ID,
+    DEFAULT_RECALL_MODE,
     DEFAULT_SPACE_ID,
     DEFAULT_TENANT_ID,
     DEFAULT_USER_ID,
@@ -180,6 +185,8 @@ class GnosisMemoryProvider(MemoryProvider):
         self._session_id = ""
         self._channel = "cli"  # gateway channel name (cli/telegram/discord/...)
         self._agent_context = "primary"
+        # Recall source for the per-turn prefetch injection (see _config).
+        self._recall_mode = DEFAULT_RECALL_MODE
         # Background threads
         self._sync_thread: Optional[threading.Thread] = None
         self._prefetch_thread: Optional[threading.Thread] = None
@@ -216,6 +223,10 @@ class GnosisMemoryProvider(MemoryProvider):
             {"key": "user_id", "description": "User identifier", "default": DEFAULT_USER_ID},
             {"key": "agent_id", "description": "Agent identifier", "default": DEFAULT_AGENT_ID},
             {"key": "tenant_id", "description": "Gnosis tenant identifier", "default": DEFAULT_TENANT_ID},
+            {"key": "recall_mode", "description": (
+                "Recall source for injected memory: 'context' (full gnosis read "
+                "pipeline via /v1/memory/context) or 'search' (raw vector search)"
+            ), "default": DEFAULT_RECALL_MODE},
         ]
 
     def save_config(self, values: Dict[str, Any], hermes_home: str) -> None:
@@ -241,6 +252,7 @@ class GnosisMemoryProvider(MemoryProvider):
         self._user_id = configured or kwargs.get("user_id") or DEFAULT_USER_ID
         self._agent_id = self._config.get("agent_id", DEFAULT_AGENT_ID)
         self._tenant_id = self._config.get("tenant_id", DEFAULT_TENANT_ID)
+        self._recall_mode = self._config.get("recall_mode", DEFAULT_RECALL_MODE)
         self._channel = kwargs.get("platform") or "cli"
         # Skip writes for non-primary contexts (cron system prompts would
         # corrupt user representations — see the ABC docstring).
@@ -408,6 +420,29 @@ class GnosisMemoryProvider(MemoryProvider):
             self._prefetch_done = False
             return result
 
+    @staticmethod
+    def _render_context_sections(sections: List[Dict[str, Any]]) -> str:
+        """Render /v1/memory/context sections into an injectable memory block.
+
+        Each section's ``content`` is already prompt-shaped by the server's
+        read pipeline, so we just concatenate the non-empty ones under a single
+        ``## Gnosis Memory`` heading. ``short_term`` sections are dropped
+        defensively: per-turn recall injection is for durable cross-session
+        memory, not the live conversation window the agent already has.
+        """
+        parts: List[str] = []
+        for section in sections or []:
+            if not isinstance(section, dict):
+                continue
+            if section.get("source") == "short_term":
+                continue
+            content = (section.get("content") or "").strip()
+            if content:
+                parts.append(content)
+        if not parts:
+            return ""
+        return "## Gnosis Memory\n" + "\n\n".join(parts)
+
     def _start_prefetch(self, query: str) -> None:
         if not query or self._client is None or self._is_breaker_open():
             return
@@ -422,14 +457,42 @@ class GnosisMemoryProvider(MemoryProvider):
             self._prefetch_result = ""
             self._prefetch_done = False
 
+        def _search_block() -> str:
+            """Raw vector search + legacy bullet rendering (the "search" path)."""
+            results = client.search(self._scope(), query, limit=10)
+            lines = [r.get("content", "") for r in (results or [])
+                     if r.get("content")]
+            if lines:
+                return "## Gnosis Memory\n" + "\n".join(f"- {l}" for l in lines)
+            return ""
+
         def _run():
             body = ""
             try:
-                results = client.search(self._scope(), query, limit=10)
-                lines = [r.get("content", "") for r in (results or [])
-                         if r.get("content")]
-                if lines:
-                    body = "## Gnosis Memory\n" + "\n".join(f"- {l}" for l in lines)
+                if self._recall_mode == "context":
+                    # Prefer gnosis's full read pipeline (adaptive routing,
+                    # supersession, graph-QA fusion, Chain-of-Note, …).
+                    try:
+                        sections = client.get_memory_context(
+                            self._scope(), query,
+                            include_short_term=False,
+                            include_reasoning=False,
+                            include_graph=True,
+                            max_items=10,
+                        )
+                        body = self._render_context_sections(sections)
+                    except Exception as e:
+                        # The richer read is best-effort: degrade to raw search
+                        # so recall still works when the endpoint is
+                        # unavailable. Only the *final* outcome touches the
+                        # breaker (below), so we don't double-count this miss.
+                        logger.debug(
+                            "Gnosis context recall failed; falling back to "
+                            "search: %s", e,
+                        )
+                        body = _search_block()
+                else:
+                    body = _search_block()
                 self._record_success()
             except Exception as e:
                 self._record_failure()
