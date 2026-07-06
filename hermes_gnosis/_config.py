@@ -11,7 +11,7 @@ Mirrors the mem0 plugin's config pattern:
     gnosis_url    — base URL of the gnosis service (e.g. https://gnosis.local)
     user_id       — canonical user identifier (default: "hermes-user")
     agent_id      — agent identifier (default: "hermes")
-    tenant_id     — gnosis tenant (default: "bromigos")
+    tenant_id     — gnosis tenant (default: "nolgia")
     timeout       — request timeout in seconds for reads (default: 10)
     add_timeout   — request timeout for extraction-mode adds (default: 30)
     recall_mode   — source for per-turn injected recall: "context" (full
@@ -34,7 +34,7 @@ CONFIG_FILENAME = "gnosis.json"
 
 DEFAULT_USER_ID = "hermes-user"
 DEFAULT_AGENT_ID = "hermes"
-DEFAULT_TENANT_ID = "bromigos"
+DEFAULT_TENANT_ID = "nolgia"
 DEFAULT_SPACE_ID = "hermes"
 DEFAULT_TIMEOUT = 10.0
 DEFAULT_ADD_TIMEOUT = 30.0

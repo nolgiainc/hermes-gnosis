@@ -21,7 +21,7 @@ def test_defaults(monkeypatch, tmp_path):
     assert cfg["gnosis_url"] == ""
     assert cfg["gnosis_token"] == ""
     assert cfg["agent_id"] == "hermes"
-    assert cfg["tenant_id"] == "bromigos"
+    assert cfg["tenant_id"] == "nolgia"
     assert cfg["timeout"] == 10.0
     assert cfg["add_timeout"] == 30.0
     assert "user_id" not in cfg  # unset → gateway-native id may flow through

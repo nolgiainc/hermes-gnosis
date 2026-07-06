@@ -9,7 +9,7 @@ from hermes_gnosis._client import GnosisError, GnosisPermissionError
 from conftest import RecordingApp, make_client
 
 SCOPE = {
-    "tenant_id": "bromigos",
+    "tenant_id": "nolgia",
     "space_id": "hermes",
     "agent_id": "hermes",
     "session_id": "sess-1",

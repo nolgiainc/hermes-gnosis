@@ -54,7 +54,7 @@ def make_provider(app: RecordingApp, *, session_id: str = "sess-1",
         "gnosis_url": "https://gnosis.test",
         "gnosis_token": "test-token",
         "agent_id": "hermes",
-        "tenant_id": "bromigos",
+        "tenant_id": "nolgia",
         "timeout": 5.0,
         "add_timeout": 5.0,
     }
