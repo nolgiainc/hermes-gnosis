@@ -16,7 +16,7 @@ Behavioral settings (live in $HERMES_HOME/gnosis.json, set via
   user_id     — canonical user identifier (default: "hermes-user"; when left
                 at the default, gateway-native ids flow through instead)
   agent_id    — agent identifier (default: "hermes")
-  tenant_id   — gnosis tenant (default: "bromigos")
+  tenant_id   — gnosis tenant (default: "nolgia")
   timeout     — read/search request timeout in seconds (default: 10)
   add_timeout — extraction-mode add timeout in seconds (default: 30)
   recall_mode — source for per-turn injected recall: "context" (full gnosis

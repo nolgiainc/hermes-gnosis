@@ -1,7 +1,7 @@
 # hermes-gnosis
 
 A [hermes-agent](https://github.com/NousResearch/hermes-agent) memory-provider
-plugin backed by a self-hosted [**gnosis**](https://github.com/bromigos-org/gnosis)
+plugin backed by a self-hosted [**gnosis**](https://github.com/nolgiainc/gnosis)
 memory service. Point a hermes agent at your gnosis instance and it gains
 durable, cross-session memory — recall injected into context automatically, plus
 tools the model can call — with no changes to the agent itself.
@@ -53,7 +53,7 @@ hermes discovers out-of-tree memory providers from `$HERMES_HOME/plugins/<name>/
 (`$HERMES_HOME` defaults to `~/.hermes`).
 
 ```bash
-pip install git+https://github.com/bromigos-org/hermes-gnosis   # or a local checkout path
+pip install git+https://github.com/nolgiainc/hermes-gnosis   # or a local checkout path
 hermes-gnosis-install                                           # copies it into $HERMES_HOME/plugins/gnosis/
 ```
 
@@ -103,7 +103,7 @@ service.
 | `gnosis_url` | — (**required**) | Base URL of the gnosis service |
 | `user_id` | `hermes-user` | Canonical user id (see [Identity](#scope--identity)) |
 | `agent_id` | `hermes` | Agent identifier in the gnosis scope |
-| `tenant_id` | `bromigos` | Gnosis tenant — **must match** the server's `GNOSIS_TENANT_ID` |
+| `tenant_id` | `nolgia` | Gnosis tenant — **must match** the server's `GNOSIS_TENANT_ID` |
 | `timeout` | `10` | Read/search request timeout (seconds) |
 | `add_timeout` | `30` | Extraction-mode add timeout (seconds) |
 | `recall_mode` | `context` | Source for per-turn injected recall: `context` (full gnosis read pipeline via `POST /v1/memory/context`) or `search` (raw vector search). The `gnosis_search` tool always uses raw search regardless. |
@@ -194,8 +194,8 @@ leftover setup-wizard default never silently buckets every gateway user together
   `"memory editing is disabled on the gnosis server"` to the model instead of
   erroring; `search`/`list`/`add` are unaffected.
 
-The sibling gnosis repo ships a [`compose.yaml`](https://github.com/bromigos-org/gnosis/blob/main/compose.yaml)
-and a [getting-started guide](https://github.com/bromigos-org/gnosis/blob/main/docs/getting-started.md)
+The sibling gnosis repo ships a [`compose.yaml`](https://github.com/nolgiainc/gnosis/blob/main/compose.yaml)
+and a [getting-started guide](https://github.com/nolgiainc/gnosis/blob/main/docs/getting-started.md)
 that stands up a service this plugin can talk to.
 
 ## Privacy

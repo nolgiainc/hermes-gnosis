@@ -21,9 +21,9 @@ def _join_background(provider):
 def test_scope_construction(app):
     provider = make_provider(app, session_id="sess-42", user_id="lesse")
     provider._agent_id = "hermes"
-    provider._tenant_id = "bromigos"
+    provider._tenant_id = "nolgia"
     assert provider._scope() == {
-        "tenant_id": "bromigos",
+        "tenant_id": "nolgia",
         "space_id": "hermes",
         "agent_id": "hermes",
         "session_id": "sess-42",
@@ -216,7 +216,7 @@ def test_prefetch_returns_formatted_memories():
     app = RecordingApp(responses={
         ("POST", "/v1/memories/search"): (200, {"results": [
             {"memory_id": "m-1", "content": "likes tea", "score": 0.9},
-            {"memory_id": "m-2", "content": "works at bromigos", "score": 0.8},
+            {"memory_id": "m-2", "content": "works at nolgia", "score": 0.8},
         ]}),
     })
     provider = make_provider(app)
@@ -227,7 +227,7 @@ def test_prefetch_returns_formatted_memories():
     result = provider.prefetch("what do I drink?")
     assert "## Gnosis Memory" in result
     assert "- likes tea" in result
-    assert "- works at bromigos" in result
+    assert "- works at nolgia" in result
 
 
 def test_prefetch_context_mode_renders_sections():
@@ -236,7 +236,7 @@ def test_prefetch_context_mode_renders_sections():
     app = RecordingApp(responses={
         ("POST", "/v1/memory/context"): (200, {"sections": [
             {"source": "long_term_facts",
-             "content": "- likes tea\n- works at bromigos", "facts": []},
+             "content": "- likes tea\n- works at nolgia", "facts": []},
             {"source": "graph", "content": "Collaborates with Bob.", "facts": []},
         ]}),
     })
