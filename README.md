@@ -1,227 +1,258 @@
 # hermes-gnosis
 
-A [hermes-agent](https://github.com/NousResearch/hermes-agent) memory-provider
-plugin backed by a self-hosted [**gnosis**](https://github.com/nolgiainc/gnosis)
-memory service. Point a hermes agent at your gnosis instance and it gains
-durable, cross-session memory — recall injected into context automatically, plus
-tools the model can call — with no changes to the agent itself.
+`hermes-gnosis` is an out-of-tree [hermes-agent](https://github.com/NousResearch/hermes-agent)
+memory provider backed by a self-hosted [gnosis](https://github.com/nolgiainc/gnosis)
+service. It implements the Hermes `MemoryProvider` interface and exposes scoped
+recall plus five model-callable memory tools. The plugin does not include a
+Gnosis server or a Hermes checkout.
 
-It implements hermes's `MemoryProvider` ABC (`agent/memory_provider.py`) and
-mirrors the shape of the bundled mem0 plugin, so activation is a one-liner.
+The package metadata and supported Python version are in [`pyproject.toml`](pyproject.toml).
+The implementation is in [`hermes_gnosis/`](hermes_gnosis/), with request behavior
+in [`_client.py`](hermes_gnosis/_client.py) and configuration loading in
+[`_config.py`](hermes_gnosis/_config.py).
 
-## How it works
+## Lifecycle
 
-The plugin drives gnosis's `/v1/memories` surface across a turn:
+The provider follows the Hermes memory-provider callbacks. Network work is
+backgrounded where the callback is intended to be best-effort, but model tool
+calls are synchronous and can wait for the configured HTTP timeout.
 
-1. **On session start** — `system_prompt_block()` injects a header telling the
-   model it *has* persistent memory of this user and must call `gnosis_search`
-   before answering anything context-dependent, followed by the user's top ~5
-   stored memories. Those are fetched in a background thread on `initialize()`,
-   so the prompt waits at most ~1 s for them and never blocks on a cold service.
+1. **Startup.** `initialize()` creates the HTTP client and starts a daemon list
+   request for page 1 with `page_size=5`. `system_prompt_block()` waits up to
+   **1.0 second** for that request, then includes whatever first five memories
+   are available. The list endpoint is unranked; this is not a relevance-ranked
+   summary. The prompt header is returned even when the service is unavailable.
+2. **Before a turn.** `on_turn_start()` starts a daemon prefetch for the user’s
+   question. The default `recall_mode=context` calls
+   `POST /v1/memory/context` and renders the returned long-term sections. A
+   context error falls back to raw `POST /v1/memories/search`; `recall_mode=search`
+   uses raw search directly. `prefetch()` waits up to **1.5 seconds** for the
+   current question and otherwise injects no block. `queue_prefetch()` only warms
+   the next query and does not wait. The `gnosis_search` tool always uses raw
+   search so its results include IDs for later edits.
+3. **During a turn.** Hermes invokes the five tools listed below on the model
+   thread. They perform synchronous HTTP requests; the short prefetch wait does
+   not apply to them.
+4. **After a turn.** For a primary context only, `sync_turn()` starts a daemon
+   `POST /v1/memories` request containing the user and assistant text with
+   `infer=true`. It ignores the optional `messages` callback argument and does
+   not send tool-call payloads. If an earlier sync is still running, the provider
+   joins it for up to **5 seconds**; if it is still alive, the new sync is skipped
+   to avoid duplicate ingestion. Cron and subagent contexts are skipped.
 
-2. **Before each turn** — `on_turn_start` kicks off a background **prefetch** of
-   the user's question. By default this calls `POST /v1/memory/context`, gnosis's
-   full **read pipeline** (adaptive routing, read-time supersession, graph-QA
-   fusion/traversal, hybrid BM25, Chain-of-Note, facts→verbatim expansion,
-   abstention/sufficiency), and injects its already-prompt-shaped `sections` as a
-   `## Gnosis Memory` block. Set `recall_mode` to `search` to fall back to raw
-   vector search instead; if the context endpoint errors, the plugin degrades to
-   raw search automatically so recall never hard-fails. When hermes calls
-   `prefetch()` the result is usually already warm; otherwise it waits at most
-   **1.5 s**, then injects the block (or nothing, if the service is slow —
-   `gnosis_search` is still the model's backstop). `queue_prefetch()` warms
-   recall for the *next* turn. (The `gnosis_search` tool always uses raw search —
-   it needs per-memory ids for `update`/`delete`.)
+## Install and activate
 
-3. **During the turn** — the model can call five tools (below) to search, list,
-   store, correct, or forget memories itself.
-
-4. **After the turn** — `sync_turn()` sends the `(user, assistant)` pair to
-   gnosis with `infer=true` for **server-side fact extraction**, on a
-   non-blocking daemon thread. This runs only for primary contexts (cron and
-   subagent turns are skipped, so background jobs never corrupt the user's
-   memory).
-
-Everything that touches the network runs off the agent's hot path or under a
-short bounded wait, and a **circuit breaker** (below) sheds load when gnosis is
-down. A memory blip degrades recall to empty; it never stalls or crashes the
-agent loop.
-
-## Install
-
-hermes discovers out-of-tree memory providers from `$HERMES_HOME/plugins/<name>/`
-(`$HERMES_HOME` defaults to `~/.hermes`).
+Python **3.11 or newer** is required. Install from a checkout or directly from
+the Git repository, then copy the provider into Hermes’ plugin directory:
 
 ```bash
-pip install git+https://github.com/nolgiainc/hermes-gnosis   # or a local checkout path
-hermes-gnosis-install                                           # copies it into $HERMES_HOME/plugins/gnosis/
+python -m pip install git+https://github.com/nolgiainc/hermes-gnosis
+hermes-gnosis-install
 ```
 
-Or skip pip entirely and symlink the package directory:
+`hermes-gnosis-install` copies the package to
+`$HERMES_HOME/plugins/gnosis/`. `$HERMES_HOME` defaults to `~/.hermes`; use a
+separate profile with `--hermes-home`:
 
 ```bash
-ln -s /path/to/hermes-gnosis/hermes_gnosis ~/.hermes/plugins/gnosis
+hermes-gnosis-install --hermes-home /path/to/hermes-home
 ```
 
-(`httpx` must be importable in the hermes venv — it already is; hermes depends on
-it.) The package also declares a `hermes_agent.plugins` pip entry point for
-forward compatibility, but today hermes activates memory ("exclusive") providers
-only via the plugins-directory discovery path, so `hermes-gnosis-install` (or the
-symlink) is required.
+For a source checkout, a symlink to the package directory is an alternative:
 
-## Activate
+```bash
+mkdir -p /path/to/hermes-home/plugins
+ln -s /path/to/hermes-gnosis/hermes_gnosis \
+  /path/to/hermes-home/plugins/gnosis
+```
+
+The installer only copies this provider. Hermes, `httpx`, a reachable Gnosis
+service, and a valid service token remain prerequisites. The package declares a
+`hermes_agent.plugins` entry point for forward compatibility, but the current
+Hermes exclusive-memory discovery path is the
+`$HERMES_HOME/plugins/<name>/` directory, so install or link the package there.
+
+Activate the provider and supply the token through Hermes’ environment file:
 
 ```bash
 hermes config set memory.provider gnosis
-echo 'GNOSIS_SERVICE_TOKEN=<service token>' >> ~/.hermes/.env
+echo 'GNOSIS_SERVICE_TOKEN=<service-token>' >> "$HERMES_HOME/.env"
 ```
 
-Or interactively: `hermes memory setup`, then select `gnosis`. Equivalent
-`config.yaml` snippet:
+Then set `gnosis_url` in `gnosis.json` (or run `hermes memory setup`). A minimal
+activation config is:
 
 ```yaml
 memory:
   provider: gnosis
 ```
 
-You also need `gnosis_url` set (see below) before the plugin can reach the
-service.
+For example, the behavioral portion of `gnosis.json` can be written without a
+token:
+
+```json
+{
+  "gnosis_url": "<gnosis-base-url>",
+  "tenant_id": "nolgia",
+  "agent_id": "hermes",
+  "recall_mode": "context"
+}
+```
 
 ## Configuration
 
-**Secret** (environment / `$HERMES_HOME/.env`):
+The provider resolves its home directory from Hermes’ `get_hermes_home()` when
+running inside Hermes. Outside Hermes it uses `$HERMES_HOME`, or `~/.hermes`
+when that variable is unset. Behavioral settings are read from
+`$HERMES_HOME/gnosis.json`; environment variables provide defaults.
 
-| Env var | Description |
-|---------|-------------|
-| `GNOSIS_SERVICE_TOKEN` | Bearer token for the gnosis service. Preferred over any plaintext `gnosis_token`; the token is never persisted to `gnosis.json`. |
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `gnosis_url` / `GNOSIS_URL` | required | Gnosis base URL. |
+| `user_id` / `GNOSIS_USER_ID` | unset, then `hermes-user` | Canonical user identifier. A configured literal `hermes-user` is treated as unset so a gateway-native ID can be used. |
+| `agent_id` / `GNOSIS_AGENT_ID` | `hermes` | Agent scope component. |
+| `tenant_id` / `GNOSIS_TENANT_ID` | `nolgia` | Gnosis tenant; it must match the server configuration. |
+| `timeout` / `GNOSIS_TIMEOUT` | `10` seconds | Default `httpx` timeout for read/search/context/list/update/delete requests, including the startup list request. |
+| `add_timeout` / `GNOSIS_ADD_TIMEOUT` | `30` seconds | Explicit timeout for every `POST /v1/memories` add, including verbatim `gnosis_add` and `sync_turn` extraction. |
+| `recall_mode` / `GNOSIS_RECALL_MODE` | `context` | `context` uses the full read pipeline; `search` uses raw vector search. |
 
-**Behavioral settings** (`$HERMES_HOME/gnosis.json`, written by
-`hermes memory setup` / `save_config()`):
+The token is `GNOSIS_SERVICE_TOKEN`. A non-empty token in the environment
+always wins over a plaintext `gnosis_token` in `gnosis.json`; the latter is
+accepted only as a compatibility fallback. `save_config()` strips
+`gnosis_token` before writing the JSON file. Non-empty keys in `gnosis.json`
+override environment defaults; malformed JSON is ignored, and invalid numeric
+timeout values fall back to their defaults.
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `gnosis_url` | — (**required**) | Base URL of the gnosis service |
-| `user_id` | `hermes-user` | Canonical user id (see [Identity](#scope--identity)) |
-| `agent_id` | `hermes` | Agent identifier in the gnosis scope |
-| `tenant_id` | `nolgia` | Gnosis tenant — **must match** the server's `GNOSIS_TENANT_ID` |
-| `timeout` | `10` | Read/search request timeout (seconds) |
-| `add_timeout` | `30` | Extraction-mode add timeout (seconds) |
-| `recall_mode` | `context` | Source for per-turn injected recall: `context` (full gnosis read pipeline via `POST /v1/memory/context`) or `search` (raw vector search). The `gnosis_search` tool always uses raw search regardless. |
+The plugin’s `get_config_schema()` exposes `gnosis_url`, the token, `user_id`,
+`agent_id`, `tenant_id`, and `recall_mode` to `hermes memory setup`. It does not
+expose `timeout` or `add_timeout` in that wizard schema; set those two values in
+the JSON file or with their environment variables. `recall_mode` is not
+validated by the loader: `context` selects the context endpoint and any other
+value follows the raw-search branch. See [`_config.py`](hermes_gnosis/_config.py)
+for the exact precedence and fallback code.
 
-Matching `GNOSIS_URL` / `GNOSIS_USER_ID` / `GNOSIS_AGENT_ID` / `GNOSIS_TENANT_ID`
-/ `GNOSIS_TIMEOUT` / `GNOSIS_ADD_TIMEOUT` / `GNOSIS_RECALL_MODE` env vars are read
-as fallback defaults; `gnosis.json` overrides them (except the token, where the
-env var always wins).
+## Timeouts and bounded waits
+
+The timeout values above are HTTP request timeouts, not global callback
+deadlines. The provider adds these callback-level bounds:
+
+| Operation | Bound |
+| --- | --- |
+| `system_prompt_block()` waiting for startup memories | 1.0s |
+| `prefetch()` waiting for the current query | 1.5s |
+| `sync_turn()` waiting for an older sync before deduplicating | 5.0s, then skip the new sync |
+| Model tools | No extra provider-level bound; reads use `timeout`, adds use `add_timeout`. |
+
+An empty prefetch result means recall injection was unavailable or no matching
+long-term content was returned. The model can still call `gnosis_search`.
 
 ## Tools
 
-The model sees five tools (`get_tool_schemas()`); their descriptions steer the
-model toward good memory hygiene:
+The provider registers exactly five tools:
 
-| Tool | Does | Model uses it… |
-|---|---|---|
-| `gnosis_search` | semantic search, ranked (`limit` default 10, max 50) | before answering anything that may depend on the user — often several times, varying wording, for multi-hop questions |
-| `gnosis_list` | full unranked, paginated dump (`page_size` default 100, max 200) | for an overview/audit, or to browse when there's no specific query |
-| `gnosis_add` | store a fact **verbatim** (`infer=false`, no extraction) | the moment the user states a lasting preference, correction, decision, or detail |
-| `gnosis_update` | replace a memory's text by id | when a stored fact changed or was wrong — correct in place instead of duplicating |
-| `gnosis_delete` | delete a memory by id | when a fact is obsolete or the user asks to forget it |
+| Tool | Behavior |
+| --- | --- |
+| `gnosis_search` | Ranked semantic search; `limit` defaults to 10 and is capped at 50. |
+| `gnosis_list` | Unranked paginated listing; `page_size` defaults to 100 and is capped at 200. |
+| `gnosis_add` | Stores the supplied text verbatim with `infer=false`; writes are tagged with the gateway channel. |
+| `gnosis_update` | Replaces a memory by ID from a prior search/list result. |
+| `gnosis_delete` | Deletes a memory by ID from a prior search/list result. |
 
-Ids for `update`/`delete` come from a prior `search`/`list` result.
-`gnosis_update` and `gnosis_delete` require the server-side edit flag (see
-[Gnosis-side requirements](#gnosis-side-requirements)).
+Update and delete require the Gnosis server’s edit feature flag. When
+`GNOSIS_MEMORY_EDIT_ENABLED=true` is not enabled, the provider returns a clear
+“memory editing is disabled on the gnosis server” tool error for those two
+operations; search, list, and add are unaffected. Tool argument validation
+(such as a missing query or content) returns an error without making a request.
 
-## Scope & identity
+## Scope and privacy
 
-Every request carries a gnosis scope object:
+Every request carries this scope:
 
 ```json
 {
   "tenant_id": "<tenant_id>",
   "space_id": "hermes",
   "agent_id": "<agent_id>",
-  "session_id": "<hermes session id, or \"hermes\">",
+  "session_id": "<Hermes session id or hermes>",
   "user_id": "<user_id>",
   "visibility": "private_user"
 }
 ```
 
-`guild_id`/`channel_id` are deliberately omitted — gnosis's scope model rejects
-empty strings for those optional fields.
+`guild_id` and `channel_id` are intentionally omitted because Gnosis rejects
+empty values for those optional fields. Long-term recall spans sessions for a
+given `tenant_id` + `user_id`; `session_id` records write provenance rather than
+partitioning reads. Writes include `metadata.channel` (for example `cli`,
+`telegram`, or `discord`). User identity is resolved in this order:
 
-**Recall spans sessions.** gnosis keys long-term recall by `tenant_id` +
-`user_id`; `session_id` is stored as write provenance and does **not** partition
-reads, so a new hermes session still recalls everything about the same user.
-Each write is also tagged with `metadata.channel` (the gateway name — `cli`,
-`telegram`, `discord`, …) so per-channel filtered views are possible server-side
-without coupling identity to channel.
+1. An operator-configured `GNOSIS_USER_ID` or `gnosis.json` `user_id`.
+2. The gateway-native ID passed to `initialize()`.
+3. The `hermes-user` fallback.
 
-**`user_id` resolution** (per turn, mirroring the mem0 plugin), first match wins:
+`sync_turn()` sends only the plain user and assistant text to Gnosis for
+server-side extraction. It does not send the `messages` callback argument or
+tool-call payloads. The service token is read from the environment and is not
+written to `gnosis.json` by the plugin.
 
-1. an operator-configured `GNOSIS_USER_ID` / `gnosis.json` `user_id` — the
-   canonical principal across every gateway;
-2. the gateway-native id passed by hermes (Telegram numeric id, Discord
-   snowflake, …);
-3. the `hermes-user` fallback (e.g. CLI with no auth).
+## Circuit breaker
 
-The literal default `hermes-user` is treated as *unset* at step 1, so a
-leftover setup-wizard default never silently buckets every gateway user together.
+The provider maintains one consecutive-failure counter and opens its circuit
+after **five consecutive counted failures**. Each operation decides whether its
+failure contributes to that shared counter. While open, calls are skipped for
+**120 seconds** and model tools return a temporary-unavailable error; after the
+cooldown, the failure counter resets and calls may resume. A counted successful
+request resets the counter as well.
 
-## Resilience
+The operation-specific rules are:
 
-- **Circuit breaker** — after **5 consecutive failures** the plugin pauses all
-  gnosis calls for **120 s**, logs a warning naming the unreachable URL, then
-  retries. Tool calls made while it's open return a clear "temporarily
-  unavailable" message to the model.
-- **4xx don't trip it** — client errors (a bad/not-found id on
-  search/list/update/delete) are the user's fault, not the service's, so they
-  surface to the model without counting toward the breaker.
-- **Off the hot path** — top-memory warmup, prefetch, and turn-sync all run on
-  daemon threads; the agent loop only ever waits the short bounded prefetch/
-  prompt windows. Turn-sync de-duplicates: a still-running sync is joined
-  briefly and skipped rather than double-ingesting.
+- `gnosis_list`, `gnosis_search`, `gnosis_update`, and `gnosis_delete` do not
+  count HTTP 4xx errors as breaker failures. The 403 edit response is handled
+  separately and never trips the breaker.
+- `gnosis_add` counts any request exception, including an HTTP 4xx response.
+- Startup top-memory fetches and `sync_turn()` count any request exception.
+- Prefetch counts only its final outcome once. In `context` mode, a failed
+  context request followed by a successful raw-search fallback is a success;
+  if both fail, the cycle counts one failure.
+
+The 4xx exemption is therefore operation-specific, not a blanket provider
+guarantee.
+The implementation is in the breaker and tool handlers in
+[`__init__.py`](hermes_gnosis/__init__.py).
 
 ## Gnosis-side requirements
 
-- A gnosis service reachable at `gnosis_url`, exposing the v1 API — `POST
-  /v1/memories`, `POST /v1/memories/search`, `POST /v1/memory/context`, `POST
-  /v1/memories/list`, `PATCH /v1/memories/{id}`, `DELETE /v1/memories/{id}` —
-  authenticated with `Authorization: Bearer <token>`. (`/v1/memory/context`
-  powers the default `recall_mode`; with `recall_mode=search` only the plain
-  endpoints are needed.)
-- A service token valid for the configured `tenant_id`.
-- **`GNOSIS_MEMORY_EDIT_ENABLED=true` on the server** for `gnosis_update` /
-  `gnosis_delete`. With it off the server returns `403` and the tools report
-  `"memory editing is disabled on the gnosis server"` to the model instead of
-  erroring; `search`/`list`/`add` are unaffected.
+The configured service must expose these authenticated v1 endpoints:
 
-The sibling gnosis repo ships a [`compose.yaml`](https://github.com/nolgiainc/gnosis/blob/main/compose.yaml)
-and a [getting-started guide](https://github.com/nolgiainc/gnosis/blob/main/docs/getting-started.md)
-that stands up a service this plugin can talk to.
+- `POST /v1/memories` for verbatim adds and `infer=true` turn extraction;
+- `POST /v1/memories/search` for raw search and the `gnosis_search` tool;
+- `POST /v1/memory/context` for the default context recall mode;
+- `POST /v1/memories/list` for startup and `gnosis_list`;
+- `PATCH /v1/memories/{id}` and `DELETE /v1/memories/{id}` for edit tools.
 
-## Privacy
+Requests use `Authorization: Bearer <token>`. The token must be valid for the
+configured tenant. The sibling Gnosis repository provides a tracked
+[`compose.yaml`](https://github.com/nolgiainc/gnosis/blob/main/compose.yaml) and
+[getting-started guide](https://github.com/nolgiainc/gnosis/blob/main/docs/getting-started.md)
+for service setup.
 
-`sync_turn` sends each user/assistant turn's **plain text** to gnosis for
-extraction. Tool-call payloads (the `messages` kwarg) are **not** sent — only the
-user and assistant text. The service token lives in the environment and is never
-written to `gnosis.json`.
+## Development and compatibility boundary
 
-## Limitations
-
-- **One provider at a time** — hermes enforces a single external memory provider;
-  activating gnosis deactivates any other (mem0, honcho, …).
-- **No client-side rerank** — the gnosis search contract exposes no rerank
-  parameter (mem0 does); ranking is whatever the server returns. gnosis can
-  rerank server-side via its own config, transparent to this plugin.
-- **Edit tools need the server flag** — with `GNOSIS_MEMORY_EDIT_ENABLED` off,
-  only `search`/`list`/`add` work.
-
-## Development
+Use a locked environment and keep build output outside the repository:
 
 ```bash
-pip install -e ".[dev]"
-pytest
+uv sync --extra dev --locked
+uv run pytest -q
+uv build --out-dir /tmp/hermes-gnosis-build
+uv run hermes-gnosis-install --help
 ```
 
-Tests use `httpx.MockTransport`; no gnosis service or hermes checkout is required
-(the plugin falls back to a local mirror of the `MemoryProvider` ABC when hermes
-isn't importable — see `_compat.py`).
+The tests use `httpx.MockTransport`; they do not contact a live Gnosis service
+or exercise a real Hermes process. When Hermes is not importable, the provider
+uses the local interface mirror in [`_compat.py`](hermes_gnosis/_compat.py).
+The test suite therefore verifies the mocked HTTP contract, lifecycle callbacks,
+configuration behavior, and tool handling—not end-to-end Hermes/Gnosis
+integration. Test sources are in [`tests/`](tests/).
+
+`dist/` is ignored by [`.gitignore`](.gitignore) and is not a release record.
+Build wheels and source archives into a run-owned directory, as above; do not
+infer a published package or upload status from a local ignored artifact.
