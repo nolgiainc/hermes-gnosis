@@ -1,0 +1,5 @@
+# gitleaks config (adapted from nolgiainc/infra, AC-04). Default rules; false
+# positives go here as narrow allowlists (a regex on the secret itself, scoped
+# to the file it lives in), never as path exclusions.
+[extend]
+useDefault = true
