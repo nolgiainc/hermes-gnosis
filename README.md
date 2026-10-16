@@ -1,8 +1,8 @@
 # hermes-gnosis
 
 `hermes-gnosis` is an out-of-tree [hermes-agent](https://github.com/NousResearch/hermes-agent)
-memory provider backed by a self-hosted [gnosis](https://github.com/nolgiainc/gnosis)
-service. It implements the Hermes `MemoryProvider` interface and exposes scoped
+memory provider backed by gnosis, NOLGIA's self-hosted memory service. It
+implements the Hermes `MemoryProvider` interface and exposes scoped
 recall plus five model-callable memory tools. The plugin does not include a
 Gnosis server or a Hermes checkout.
 
@@ -230,10 +230,9 @@ The configured service must expose these authenticated v1 endpoints:
 - `PATCH /v1/memories/{id}` and `DELETE /v1/memories/{id}` for edit tools.
 
 Requests use `Authorization: Bearer <token>`. The token must be valid for the
-configured tenant. The sibling Gnosis repository provides a tracked
-[`compose.yaml`](https://github.com/nolgiainc/gnosis/blob/main/compose.yaml) and
-[getting-started guide](https://github.com/nolgiainc/gnosis/blob/main/docs/getting-started.md)
-for service setup.
+configured tenant. The Gnosis service itself, and its setup guide, are not
+part of this repository and are not public; point `gnosis_url` at a Gnosis
+deployment you have access to.
 
 ## Development and compatibility boundary
 
